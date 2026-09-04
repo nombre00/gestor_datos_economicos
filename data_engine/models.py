@@ -1,0 +1,1 @@
+# definición de las tablas relacionales del proyecto.

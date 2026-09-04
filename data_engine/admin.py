@@ -1,0 +1,1 @@
+# Configuración para ver modelos en el panel de django.

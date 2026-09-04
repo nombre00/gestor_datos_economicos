@@ -1,0 +1,1 @@
+# Comando principal de django.

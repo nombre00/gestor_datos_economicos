@@ -1,0 +1,1 @@
+# punto de entrada para ejecutar Django mediante servidores compatibles

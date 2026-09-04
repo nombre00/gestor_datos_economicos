@@ -1,0 +1,1 @@
+# En esta carpeta va cómo el exterior se comunica con este backend. Es la interfaz pública del backend.
