@@ -1,0 +1,17 @@
+# --- Backend (Django) ---
+Django>=5.0,<6.0
+djangorestframework>=3.15,<4.0
+
+# --- Manejo de datos (usado tanto en notebooks como en data_engine/services) ---
+pandas>=2.2,<3.0
+openpyxl>=3.1,<4.0          # lectura de .xlsx (Composición/Series Históricas de Deuda)
+
+# --- Notebooks exploratorios ---
+jupyterlab>=4.0,<5.0
+matplotlib>=3.8,<4.0        # visualización rápida en notebook antes de definir la API
+
+# --- Utilidades ---
+python-dotenv>=1.0,<2.0     # variables de entorno (ej. settings de Django) fuera del código
+
+# --- Pendiente, agregar cuando se defina qué predecir (ver contexto_1.md, paso 7) ---
+# scikit-learn

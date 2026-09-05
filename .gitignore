@@ -1,0 +1,39 @@
+# --- Entorno virtual ---
+.venv/
+env/
+venv/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.Python
+
+# --- Django ---
+db.sqlite3
+db.sqlite3-3
+staticfiles/
+media/
+*.log
+
+# --- Variables de entorno / secretos ---
+.env
+.env.*
+!.env.example
+
+# --- Notebooks ---
+.ipynb_checkpoints/
+
+# --- Testing / cache ---
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- Editor / IDE ---
+.vscode/
+.idea/
+
+# --- Sistema operativo ---
+.DS_Store
+Thumbs.db
