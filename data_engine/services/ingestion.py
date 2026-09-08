@@ -1,1 +1,0 @@
-# Scripts para descargar de APIs, CSVs, DBs externas.

@@ -1,7 +1,7 @@
 """
 serie_historica_deuda.py
 
-Transformador específico para el dataset "Series Históricas de Deuda"
+Transformador específico para el dataset "Series Históricas de Deuda" 
 (Ministerio de Hacienda). Convierte el Excel de origen (2 hojas, formato
 ancho por año) en una lista de registros en formato largo, listos para
 el modelo SerieHistoricaDeuda.
@@ -75,8 +75,19 @@ def transformar(path_excel: str) -> list[RegistroSerieHistoricaDeuda]:
 
     registros: list[RegistroSerieHistoricaDeuda] = []
 
-    for fila_usd, fila_clp in zip(df_usd.itertuples(index=False), df_clp.itertuples(index=False)):
+    for i, (fila_usd, fila_clp) in enumerate(
+        zip(df_usd.itertuples(index=False), df_clp.itertuples(index=False))
+    ):
         anio, fecha_corte, es_parcial = resolver_anio_y_fecha(fila_usd.anio_raw)
+        anio_clp, _, _ = resolver_anio_y_fecha(fila_clp.anio_raw)
+
+        if anio != anio_clp:
+            raise ValueError(
+                f"Desalineación entre hojas en la posición {i}: "
+                f"USD trae año {anio}, CLP trae año {anio_clp}. "
+                "Las hojas no están en el mismo orden; revisar el Excel "
+                "antes de continuar (no se procesan datos parcialmente)."
+            )
 
         # --- Deuda Bruta ---
         pct_pib_bruta = parsear_decimal_simple(fila_usd.bruta_pct_pib)

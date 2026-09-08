@@ -1,5 +1,5 @@
 """
-Modelo Django para el dataset "Series Históricas de Deuda" (Ministerio de Hacienda).
+Modelo Django para el dataset "Series Históricas de Deuda" (Ministerio de Hacienda). 
 
 Corresponde al esquema acordado en la sesión de diseño:
     (anio, fecha_corte, tipo_deuda, moneda, monto_millones, pct_pib, es_corte_parcial, fuente)
@@ -61,7 +61,7 @@ class SerieHistoricaDeuda(models.Model):
     )
     fuente = models.CharField(
         max_length=100,
-        default="series_historicas_deuda_hacienda",
+        default="hacienda_series_historicas_deuda",   # ← coincide con transform.FUENTE
         help_text="Identificador del dataset de origen.",
     )
     fecha_carga = models.DateTimeField(

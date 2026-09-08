@@ -1,7 +1,7 @@
 """
 common.py
 
-Utilidades de parseo defensivo compartidas entre los distintos
+Utilidades de parseo defensivo compartidas entre los distintos 
 transformadores de dataset. Pensado para crecer a medida que se
 detecten patrones repetidos entre fuentes (ej. separador de miles
 chileno, espacios non-breaking, nulos representados como '-', BOM
