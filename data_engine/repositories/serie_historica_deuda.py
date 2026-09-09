@@ -10,6 +10,7 @@ revisiones reales de Hacienda como para detectar bugs del propio pipeline.
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 from typing import Iterable
 
 from data_engine.models import SerieHistoricaDeuda
@@ -78,6 +79,20 @@ def guardar(registros: Iterable[RegistroSerieHistoricaDeuda]) -> dict[str, int]:
     return resumen
 
 
+def _normalizar_para_comparar(instancia: SerieHistoricaDeuda, campo: str, valor):
+    """Si el campo es DecimalField, cuantiza el valor entrante a la misma
+    precisión (decimal_places) que tiene el campo en el modelo, para que la
+    comparación no marque como 'cambio' lo que es solo ruido de precisión
+    de punto flotante (ej. pct_pib calculado con más decimales de los que
+    el campo realmente almacena)."""
+    field = instancia._meta.get_field(campo)
+    decimal_places = getattr(field, "decimal_places", None)
+    if decimal_places is not None and isinstance(valor, Decimal):
+        exponente = Decimal(1).scaleb(-decimal_places)
+        return valor.quantize(exponente)
+    return valor
+
+
 def _detectar_cambios(
     instancia: SerieHistoricaDeuda,
     registro: RegistroSerieHistoricaDeuda,
@@ -88,7 +103,9 @@ def _detectar_cambios(
     cambios = {}
     for campo in _CAMPOS_A_COMPARAR:
         valor_actual = getattr(instancia, campo)
-        valor_nuevo = getattr(registro, campo)
+        valor_nuevo = _normalizar_para_comparar(
+            instancia, campo, getattr(registro, campo)
+        )
         if valor_actual != valor_nuevo:
             cambios[campo] = (valor_actual, valor_nuevo)
     return cambios

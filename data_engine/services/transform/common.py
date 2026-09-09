@@ -73,3 +73,38 @@ def resolver_anio_y_fecha(valor_periodo: Any) -> tuple[int, datetime.date, bool]
     anio = int(valor_periodo)
     fecha = datetime.date(anio, 12, 31)
     return anio, fecha, False
+
+
+def parsear_monto_con_guion(valor):
+    """Parsea un monto que puede venir como '-' (sin deuda reportada en esa
+    categoría/período — confirmado que se comporta como 0 en las sumas de
+    validación contra la fila Total del Excel) o como un número normal.
+
+    A diferencia de parsear_monto(), este NO maneja separadores de miles ni
+    espacios non-breaking: ese dataset (Composición de la Deuda) no los
+    tiene. Si algún día aparecieran, se prefiere que esto falle explícito
+    en vez de intentar adivinar un formato no confirmado."""
+    if isinstance(valor, str) and valor.strip() == "-":
+        return Decimal("0")
+    return parsear_decimal_simple(valor)
+
+
+def derretir_ancho_a_largo(df, columna_categoria="categoria"):
+    """Convierte un DataFrame en formato ancho (una fila por categoría,
+    columnas = períodos) a formato largo (una fila por observación).
+
+    Asume que la primera columna del DataFrame trae las categorías (nombres
+    de fila, ej. 'Dólares USA', 'Banco Central de Chile') y todas las demás
+    columnas son períodos — años como int, o un Timestamp para el corte
+    parcial (mismo patrón que ya manejas en resolver_anio_y_fecha, aplicable
+    aquí sin cambios porque la señal datetime-vs-int es la misma, solo que
+    ahora vive en el nombre de columna en vez de en una celda).
+
+    No excluye ninguna fila (ej. 'Total') ni convierte los valores todavía —
+    esa interpretación específica del dataset queda para quien llama."""
+    df = df.rename(columns={df.columns[0]: columna_categoria})
+    return df.melt(
+        id_vars=[columna_categoria],
+        var_name="periodo_raw",
+        value_name="valor_raw",
+    )

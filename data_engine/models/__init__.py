@@ -1,1 +1,4 @@
 from .serie_historica_deuda import SerieHistoricaDeuda
+from .composicion_deuda_moneda import ComposicionDeudaMoneda
+from .composicion_deuda_acreedor import ComposicionDeudaAcreedor
+from .composicion_deuda_legislacion import ComposicionDeudaLegislacion

@@ -10,8 +10,7 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
-# En desarrollo esto puede vivir acá; antes de producción, muévelo también al .env.
-SECRET_KEY = "django-insecure-CAMBIA-ESTO-por-algo-random-antes-de-produccion"
+SECRET_KEY = os.environ["SECRET_KEY"]
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
