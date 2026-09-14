@@ -43,6 +43,39 @@ class TipoFila(models.TextChoices):
     SUBCONJUNTO = "subconjunto", "Subconjunto no aditivo (ej. Comprado en el ML)"
 
 
+class StockTituloDeudaQuerySet(models.QuerySet):
+    def tenedores_reales(self):
+        """Excluye TOTAL_INSTRUMENTO y SUBCONJUNTO — solo filas de tenedor
+        que se pueden sumar sin inflar el total."""
+        return self.filter(tipo_fila=TipoFila.TENEDOR)
+
+    def fin_de_anio(self):
+        """Solo trimestre IV — comparable con los datasets anuales de Hacienda.
+        Un año en curso (sin trimestre IV publicado aún) simplemente no aparece."""
+        return self.filter(trimestre=4)
+
+    def total_por_instrumento(self, instrumento: str, anio: int, trimestre: int):
+        """Suma los tenedores reales de un instrumento en un período específico.
+        Sirve también como chequeo cruzado contra la fila TOTAL_INSTRUMENTO ya guardada."""
+        return self.tenedores_reales().filter(
+            instrumento=instrumento, anio=anio, trimestre=trimestre
+        ).aggregate(total=models.Sum("monto_miles_millones_clp"))["total"]
+
+
+class StockTituloDeudaManager(models.Manager):
+    def get_queryset(self):
+        return StockTituloDeudaQuerySet(self.model, using=self._db)
+
+    def tenedores_reales(self):
+        return self.get_queryset().tenedores_reales()
+
+    def fin_de_anio(self):
+        return self.get_queryset().fin_de_anio()
+
+    def total_por_instrumento(self, instrumento: str, anio: int, trimestre: int):
+        return self.get_queryset().total_por_instrumento(instrumento, anio, trimestre)
+
+
 class StockTituloDeuda(models.Model):
     instrumento = models.CharField(max_length=50, choices=Instrumento.choices)
     tenedor = models.CharField(max_length=50, choices=Tenedor.choices, null=True, blank=True)
@@ -56,6 +89,8 @@ class StockTituloDeuda(models.Model):
 
     fuente = models.CharField(max_length=100, default="bcentral_emv_4")
     fecha_carga = models.DateTimeField(auto_now_add=True)
+
+    objects = StockTituloDeudaManager()
 
     class Meta:
         constraints = [
