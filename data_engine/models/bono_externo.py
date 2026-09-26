@@ -34,7 +34,7 @@ class BonoExterno(models.Model):
     tasa_local_tesoro_chile = models.DecimalField(max_digits=8, decimal_places=4, null=True, blank=True)
 
     precio = models.DecimalField(max_digits=8, decimal_places=4)
-    yield_emision = models.DecimalField(max_digits=8, decimal_places=4)
+    yield_emision = models.DecimalField(max_digits=8, decimal_places=4, null=True, blank=True)
 
     spread_caratula = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
     spread_nota_referencia = models.CharField(max_length=20, null=True, blank=True)
