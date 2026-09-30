@@ -4,3 +4,4 @@ from .composicion_deuda_acreedor import ComposicionDeudaAcreedor
 from .composicion_deuda_legislacion import ComposicionDeudaLegislacion
 from .stock_titulo_deuda import StockTituloDeuda, Instrumento, Tenedor, TipoFila
 from .bono_externo import BonoExterno, Moneda, PagoIntereses, Vigencia
+from .bono_local import BonoLocal, TipoInstrumento, Status
