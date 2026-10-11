@@ -7,7 +7,10 @@ from data_engine.models import (
     ComposicionDeudaAcreedor,
     ComposicionDeudaMoneda,
     SerieHistoricaDeuda,
+    StockTituloDeuda
 )
+from data_engine.models.stock_titulo_deuda import Instrumento, Tenedor
+
 
 
 def _armar_series(modelo):
@@ -74,3 +77,60 @@ class SerieHistoricaView(APIView):
         ]
 
         return Response({"categorias": [str(a) for a in anios], "series": series})
+
+
+def _armar_respuesta_trimestral(acumulado, etiquetas):
+    """acumulado: {clave: {fecha_corte: monto}} -> formato {categorias, series}.
+    Descarta los trimestres sin ningún dato (2008-T1, donde la fuente trae todo en 0)."""
+    fechas = sorted({fecha for por_fecha in acumulado.values() for fecha in por_fecha})
+    fechas = [
+        f for f in fechas
+        if sum(por_fecha.get(f, 0) for por_fecha in acumulado.values()) > 0
+    ]
+
+    series = [
+        {
+            "nombre": etiquetas.get(clave, clave),
+            "datos": [por_fecha.get(f, 0) for f in fechas],
+        }
+        for clave, por_fecha in acumulado.items()
+    ]
+    categorias = [f"{f.year}-T{(f.month - 1) // 3 + 1}" for f in fechas]
+    return {"categorias": categorias, "series": series}
+
+
+class TenedoresGobiernoView(APIView):
+    def get(self, request):
+        etiquetas = dict(Tenedor.choices)
+        filas = (
+            StockTituloDeuda.objects.tenedores_reales()
+            .filter(instrumento=Instrumento.BONOS_GOBIERNO_GENERAL)
+            .order_by("fecha_corte")
+            .values("fecha_corte", "tenedor", "monto_miles_millones_clp")
+        )
+
+        acumulado = defaultdict(lambda: defaultdict(float))
+        for f in filas:
+            acumulado[f["tenedor"]][f["fecha_corte"]] += float(f["monto_miles_millones_clp"])
+
+        return Response(_armar_respuesta_trimestral(acumulado, etiquetas))
+
+
+class TenedoresPlazoView(APIView):
+    def get(self, request):
+        etiquetas = {
+            "intermediacion_financiera": "Intermediación financiera (corto plazo)",
+            "renta_fija": "Renta fija (largo plazo)",
+        }
+        filas = (
+            StockTituloDeuda.objects.tenedores_reales()
+            .order_by("fecha_corte")
+            .values("fecha_corte", "instrumento", "monto_miles_millones_clp")
+        )
+
+        acumulado = defaultdict(lambda: defaultdict(float))
+        for f in filas:
+            sector = Instrumento(f["instrumento"]).sector_emisor
+            acumulado[sector][f["fecha_corte"]] += float(f["monto_miles_millones_clp"])
+
+        return Response(_armar_respuesta_trimestral(acumulado, etiquetas))
