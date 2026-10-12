@@ -3,6 +3,9 @@ from django.urls import path
 from data_engine.models import ComposicionDeudaAcreedor, ComposicionDeudaMoneda
 
 from .views import (
+    BonosExternosSpreadView,
+    BonosExternosVencimientosView,
+    BonosExternosView,
     ComposicionView,
     SerieHistoricaView,
     TenedoresGobiernoView,
@@ -15,4 +18,7 @@ urlpatterns = [
     path("serie-historica/", SerieHistoricaView.as_view()),
     path("tenedores/gobierno/", TenedoresGobiernoView.as_view()),
     path("tenedores/plazo/", TenedoresPlazoView.as_view()),
+    path("bonos/externos/", BonosExternosView.as_view()),
+    path("bonos/externos/vencimientos/", BonosExternosVencimientosView.as_view()),
+    path("bonos/externos/spread/", BonosExternosSpreadView.as_view()),
 ]
