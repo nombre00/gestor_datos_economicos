@@ -1,4 +1,5 @@
 from collections import defaultdict
+from datetime import date
 
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -8,10 +9,13 @@ from data_engine.models import (
     ComposicionDeudaMoneda,
     SerieHistoricaDeuda,
     StockTituloDeuda,
-    BonoExterno
+    BonoExterno,
+    BonoLocal, 
+    IndicadorEconomico
 )
 from data_engine.models.stock_titulo_deuda import Instrumento, Tenedor
 from data_engine.models.bono_externo import Moneda as MonedaBonoExterno, Vigencia
+from data_engine.models.bono_local import Status, TipoInstrumento
 
 
 
@@ -217,6 +221,130 @@ class BonosExternosSpreadView(APIView):
                 "spread": float(b.spread_caratula),
                 "anio_emision": b.fecha_emision.year,
                 "es_reapertura": b.es_reapertura,
+            }
+            for b in bonos
+        ]
+        return Response(datos)
+
+
+def _monto_bono_local(colocado, emitido):
+    """El monto colocado es lo que realmente se vendió y se va a pagar.
+    Los bonos antiguos (hasta ~2011) solo tienen monto emitido."""
+    return colocado if colocado is not None else emitido
+
+
+class BonosLocalesView(APIView):
+    """Lista completa de bonos locales para la tabla (una fila por colocación)."""
+
+    def get(self, request):
+        bonos = BonoLocal.objects.order_by("fecha_vencimiento", "nombre_bono", "anio")
+        datos = []
+        for b in bonos:
+            monto = _monto_bono_local(b.monto_colocado, b.monto_emitido)
+            datos.append({
+                "nombre_bono": b.nombre_bono,
+                "anio": b.anio,
+                "tipo": b.tipo_instrumento,
+                "tipo_etiqueta": b.get_tipo_instrumento_display(),
+                "unidad": TipoInstrumento(b.tipo_instrumento).moneda_unidad,
+                "fecha_emision": b.fecha_emision.isoformat(),
+                "fecha_vencimiento": b.fecha_vencimiento.isoformat(),
+                "es_reapertura": b.es_reapertura,
+                "monto": _a_float(monto),
+                "monto_es_colocado": b.monto_colocado is not None,
+                "tasa_caratula": float(b.tasa_caratula),
+                "paga_intereses": b.paga_intereses_raw,
+                "status": b.status,
+                "status_etiqueta": b.get_status_display(),
+            })
+        return Response(datos)
+
+
+class BonosLocalesVencimientosView(APIView):
+    """Monto vigente que vence por año y por tipo, en millones de CLP.
+    Los BTU (miles de UF) se valorizan con la UF de la fecha de corte (hoy),
+    y además se entrega la serie de BTU en su unidad nativa (miles de UF)."""
+
+    def get(self, request):
+        uf = IndicadorEconomico.objects.valor_al("uf", date.today())
+        if uf is None:
+            return Response(
+                {"detail": "No hay valor de UF cargado; corre la ingesta de indicadores."},
+                status=503,
+            )
+        valor_uf = float(uf.valor)
+
+        filas = (
+            BonoLocal.objects
+            .filter(status=Status.VIGENTE)
+            .values("tipo_instrumento", "fecha_vencimiento", "monto_emitido", "monto_colocado")
+        )
+
+        en_clp = defaultdict(lambda: defaultdict(float))
+        btu_en_uf = defaultdict(float)
+        for f in filas:
+            monto = _monto_bono_local(f["monto_colocado"], f["monto_emitido"])
+            if monto is None:
+                continue
+            monto = float(monto)
+            anio = f["fecha_vencimiento"].year
+            tipo = f["tipo_instrumento"]
+
+            if tipo == TipoInstrumento.BTU.value:
+                btu_en_uf[anio] += monto
+                # miles de UF -> millones de CLP: monto * 1.000 * UF / 1.000.000
+                en_clp[tipo][anio] += monto * valor_uf / 1000
+            else:
+                en_clp[tipo][anio] += monto
+
+        if not en_clp:
+            return Response({
+                "categorias": [], "series": [], "serie_btu_uf": [],
+                "fecha_valorizacion": uf.fecha.isoformat(), "valor_uf": valor_uf,
+            })
+
+        anios_con_dato = {a for por_anio in en_clp.values() for a in por_anio}
+        anios = list(range(min(anios_con_dato), max(anios_con_dato) + 1))
+        etiquetas = dict(TipoInstrumento.choices)
+
+        series = [
+            {
+                "nombre": etiquetas[tipo.value],
+                "datos": [en_clp[tipo.value].get(a, 0) for a in anios],
+            }
+            for tipo in TipoInstrumento
+            if tipo.value in en_clp
+        ]
+
+        return Response({
+            "categorias": [str(a) for a in anios],
+            "series": series,
+            "serie_btu_uf": [btu_en_uf.get(a, 0) for a in anios],
+            "fecha_valorizacion": uf.fecha.isoformat(),
+            "valor_uf": valor_uf,
+        })
+
+
+class BonosLocalesTasaView(APIView):
+    """Puntos (plazo al emitir, tasa carátula, tipo) para el scatter.
+    Sin Letras (cupón cero, tasa 0%) y sin reaperturas: una reapertura tiene
+    la misma tasa y vencimiento que el bono original, solo duplicaría el punto."""
+
+    def get(self, request):
+        bonos = (
+            BonoLocal.objects
+            .filter(es_reapertura=False)
+            .exclude(tipo_instrumento=TipoInstrumento.LETRA)
+            .order_by("fecha_emision")
+        )
+        datos = [
+            {
+                "nombre_bono": b.nombre_bono,
+                "tipo": b.tipo_instrumento,
+                "tipo_etiqueta": b.get_tipo_instrumento_display(),
+                "plazo_anios": round((b.fecha_vencimiento - b.fecha_emision).days / 365.25, 2),
+                "tasa": float(b.tasa_caratula),
+                "anio_emision": b.fecha_emision.year,
             }
             for b in bonos
         ]
