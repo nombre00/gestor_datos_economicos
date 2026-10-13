@@ -13,6 +13,8 @@ from .views import (
     BonosLocalesTasaView,
     BonosLocalesVencimientosView,
     BonosLocalesView,
+    BonosPanoramaView,
+    SerieHistoricaResumenView,
 )
 
 urlpatterns = [
@@ -27,4 +29,6 @@ urlpatterns = [
     path("bonos/locales/", BonosLocalesView.as_view()),
     path("bonos/locales/vencimientos/", BonosLocalesVencimientosView.as_view()),
     path("bonos/locales/tasa/", BonosLocalesTasaView.as_view()),
+    path("bonos/panorama/", BonosPanoramaView.as_view()),
+    path("serie-historica/resumen/", SerieHistoricaResumenView.as_view()),
 ]

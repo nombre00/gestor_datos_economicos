@@ -178,7 +178,7 @@ class BonosExternosVencimientosView(APIView):
     def get(self, request):
         filas = (
             BonoExterno.objects
-            .filter(vigencia=Vigencia.VIGENTE)
+            .filter(vigencia=Vigencia.VIGENTE, fecha_vencimiento__gte=date.today())
             .values("fecha_vencimiento", "moneda", "monto")
         )
 
@@ -276,7 +276,7 @@ class BonosLocalesVencimientosView(APIView):
 
         filas = (
             BonoLocal.objects
-            .filter(status=Status.VIGENTE)
+            .filter(status=Status.VIGENTE, fecha_vencimiento__gte=date.today())
             .values("tipo_instrumento", "fecha_vencimiento", "monto_emitido", "monto_colocado")
         )
 
@@ -349,3 +349,204 @@ class BonosLocalesTasaView(APIView):
             for b in bonos
         ]
         return Response(datos)
+
+
+def _sumar_anios(fecha, anios):
+    try:
+        return fecha.replace(year=fecha.year + anios)
+    except ValueError:  # 29 de febrero en un año no bisiesto
+        return fecha.replace(year=fecha.year + anios, day=28)
+
+
+class BonosPanoramaView(APIView):
+    """Panorama de la deuda en bonos (externos + locales) vigente,
+    valorizada en millones de CLP a la fecha de corte (hoy)."""
+
+    TRAMOS_ANIOS = (1, 5, 10, 30)
+    ORDEN_SERIES = ("Externos USD", "Externos EUR", "Externos CLP", "BTP", "BTU", "Letras")
+    ETIQUETAS_MONEDA = {"clp": "Pesos (CLP)", "uf": "UF", "usd": "Dólar (USD)", "eur": "Euro (EUR)"}
+
+    def get(self, request):
+        hoy = date.today()
+
+        indicadores = {
+            ind: IndicadorEconomico.objects.valor_al(ind, hoy)
+            for ind in ("uf", "dolar", "euro")
+        }
+        faltantes = [ind for ind, obj in indicadores.items() if obj is None]
+        if faltantes:
+            return Response(
+                {"detail": f"Faltan indicadores: {', '.join(faltantes)}. Corre la ingesta."},
+                status=503,
+            )
+
+        uf = float(indicadores["uf"].valor)
+        a_clp_externo = {
+            MonedaBonoExterno.USD.value: float(indicadores["dolar"].valor),
+            MonedaBonoExterno.EUR.value: float(indicadores["euro"].valor),
+            MonedaBonoExterno.CLP.value: 1.0,
+        }
+
+        # Cada fila: (serie, moneda, mercado, fecha_vencimiento, monto en millones de CLP)
+        filas = []
+
+        externos = (
+            BonoExterno.objects
+            .filter(vigencia=Vigencia.VIGENTE, fecha_vencimiento__gte=hoy)
+            .values("moneda", "fecha_vencimiento", "monto")
+        )
+        for b in externos:
+            factor = a_clp_externo.get(b["moneda"])
+            if factor is None:
+                continue
+            filas.append((
+                f"Externos {b['moneda'].upper()}",
+                b["moneda"],
+                "Mercado externo",
+                b["fecha_vencimiento"],
+                float(b["monto"]) * factor,  # millones de moneda de origen -> millones de CLP
+            ))
+
+        locales = (
+            BonoLocal.objects
+            .filter(status=Status.VIGENTE, fecha_vencimiento__gte=hoy)
+            .values("tipo_instrumento", "fecha_vencimiento", "monto_emitido", "monto_colocado")
+        )
+        for b in locales:
+            monto = _monto_bono_local(b["monto_colocado"], b["monto_emitido"])
+            if monto is None:
+                continue
+            monto = float(monto)
+            tipo = b["tipo_instrumento"]
+            if tipo == TipoInstrumento.BTU.value:
+                # miles de UF -> millones de CLP
+                filas.append(("BTU", "uf", "Mercado local", b["fecha_vencimiento"], monto * uf / 1000))
+            elif tipo == TipoInstrumento.BTP.value:
+                filas.append(("BTP", "clp", "Mercado local", b["fecha_vencimiento"], monto))
+            else:
+                filas.append(("Letras", "clp", "Mercado local", b["fecha_vencimiento"], monto))
+
+        # Vencimientos por año y serie
+        por_serie = defaultdict(lambda: defaultdict(float))
+        for serie, _, _, fv, monto in filas:
+            por_serie[serie][fv.year] += monto
+
+        if filas:
+            anios_con_dato = {fv.year for _, _, _, fv, _ in filas}
+            anios = list(range(min(anios_con_dato), max(anios_con_dato) + 1))
+        else:
+            anios = []
+
+        series = [
+            {"nombre": serie, "datos": [por_serie[serie].get(a, 0) for a in anios]}
+            for serie in self.ORDEN_SERIES
+            if serie in por_serie
+        ]
+
+        # Composición del stock vigente
+        por_moneda = defaultdict(float)
+        por_mercado = defaultdict(float)
+        for _, moneda, mercado, _, monto in filas:
+            por_moneda[moneda] += monto
+            por_mercado[mercado] += monto
+
+        composicion_moneda = [
+            {"nombre": self.ETIQUETAS_MONEDA.get(m, m), "valor": v}
+            for m, v in sorted(por_moneda.items(), key=lambda x: -x[1])
+        ]
+        composicion_mercado = [
+            {"nombre": m, "valor": v}
+            for m, v in sorted(por_mercado.items(), key=lambda x: -x[1])
+        ]
+
+        # Cifras clave: acumulado desde hoy y vida media ponderada por monto
+        total = sum(monto for *_, monto in filas)
+        tramos = []
+        for n in self.TRAMOS_ANIOS:
+            limite = _sumar_anios(hoy, n)
+            monto_tramo = sum(monto for _, _, _, fv, monto in filas if fv <= limite)
+            tramos.append({
+                "anios": n,
+                "monto": monto_tramo,
+                "pct": (monto_tramo / total * 100) if total else 0,
+            })
+
+        vida_media = (
+            sum(monto * (fv - hoy).days for _, _, _, fv, monto in filas) / 365.25 / total
+            if total else 0
+        )
+
+        return Response({
+            "fecha_corte": hoy.isoformat(),
+            "indicadores": {
+                ind: {"valor": float(obj.valor), "fecha": obj.fecha.isoformat()}
+                for ind, obj in indicadores.items()
+            },
+            "vencimientos": {"categorias": [str(a) for a in anios], "series": series},
+            "composicion_moneda": composicion_moneda,
+            "composicion_mercado": composicion_mercado,
+            "cifras": {
+                "total": total,
+                "tramos": tramos,
+                "vida_media": round(vida_media, 1),
+            },
+        })
+
+
+class SerieHistoricaResumenView(APIView):
+    """Cifras clave del Home a partir de SerieHistoricaDeuda (montos en USD).
+    pct_pib está guardado como fracción (0.375); aquí se entrega en porcentaje (37,5)."""
+
+    def get(self, request):
+        def filas_de(tipo):
+            return list(
+                SerieHistoricaDeuda.objects
+                .filter(moneda="usd", tipo_deuda=tipo)
+                .order_by("fecha_corte")
+                .values("anio", "fecha_corte", "monto_millones", "pct_pib", "es_corte_parcial")
+            )
+
+        def pct(fila):
+            return float(fila["pct_pib"]) * 100 if fila["pct_pib"] is not None else None
+
+        def resumen_ultimo(filas):
+            f = filas[-1]
+            return {
+                "fecha_corte": f["fecha_corte"].isoformat(),
+                "es_corte_parcial": f["es_corte_parcial"],
+                "monto_millones_usd": float(f["monto_millones"]),
+                "pct_pib": pct(f),
+            }
+
+        bruta = filas_de("bruta")
+        neta = filas_de("neta")
+        if not bruta:
+            return Response({"detail": "No hay datos de deuda bruta."}, status=404)
+
+        # Cambio: último corte vs el último cierre de año completo anterior
+        ultimo = bruta[-1]
+        referencia = next(
+            (f for f in reversed(bruta[:-1])
+             if not f["es_corte_parcial"] and f["anio"] < ultimo["anio"]),
+            None,
+        )
+        cambio = None
+        if referencia and pct(ultimo) is not None and pct(referencia) is not None:
+            cambio = {
+                "puntos": pct(ultimo) - pct(referencia),
+                "desde": referencia["fecha_corte"].isoformat(),
+                "hasta": ultimo["fecha_corte"].isoformat(),
+            }
+
+        con_pct = [f for f in bruta if f["pct_pib"] is not None]
+        minimo = None
+        if con_pct:
+            f_min = min(con_pct, key=lambda f: f["pct_pib"])
+            minimo = {"pct_pib": pct(f_min), "anio": f_min["anio"]}
+
+        return Response({
+            "bruta": resumen_ultimo(bruta),
+            "neta": resumen_ultimo(neta) if neta else None,
+            "cambio_bruta": cambio,
+            "minimo_bruta": minimo,
+        })
