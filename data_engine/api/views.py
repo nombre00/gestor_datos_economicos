@@ -389,28 +389,32 @@ class BonosPanoramaView(APIView):
 
         # Cada fila: (serie, moneda, mercado, fecha_vencimiento, monto en millones de CLP)
         filas = []
+        # Para el gráfico de tasas: (serie, año de vencimiento, monto en millones de CLP, tasa en %)
+        filas_tasa = []
 
         externos = (
             BonoExterno.objects
             .filter(vigencia=Vigencia.VIGENTE, fecha_vencimiento__gte=hoy)
-            .values("moneda", "fecha_vencimiento", "monto")
+            .values("moneda", "fecha_vencimiento", "monto", "yield_emision", "tasa_caratula_fija")
         )
         for b in externos:
             factor = a_clp_externo.get(b["moneda"])
             if factor is None:
                 continue
-            filas.append((
-                f"Externos {b['moneda'].upper()}",
-                b["moneda"],
-                "Mercado externo",
-                b["fecha_vencimiento"],
-                float(b["monto"]) * factor,  # millones de moneda de origen -> millones de CLP
-            ))
+            serie = f"Externos {b['moneda'].upper()}"
+            monto_clp = float(b["monto"]) * factor  # millones de moneda de origen -> millones de CLP
+            filas.append((serie, b["moneda"], "Mercado externo", b["fecha_vencimiento"], monto_clp))
+
+            # Costo real del financiamiento: rendimiento de emisión.
+            # Si no existe (bonos de tasa variable), se usa la tasa carátula fija si la hay.
+            tasa = b["yield_emision"] if b["yield_emision"] is not None else b["tasa_caratula_fija"]
+            if tasa is not None:
+                filas_tasa.append((serie, b["fecha_vencimiento"].year, monto_clp, float(tasa)))
 
         locales = (
             BonoLocal.objects
             .filter(status=Status.VIGENTE, fecha_vencimiento__gte=hoy)
-            .values("tipo_instrumento", "fecha_vencimiento", "monto_emitido", "monto_colocado")
+            .values("tipo_instrumento", "fecha_vencimiento", "monto_emitido", "monto_colocado", "tasa_caratula")
         )
         for b in locales:
             monto = _monto_bono_local(b["monto_colocado"], b["monto_emitido"])
@@ -419,12 +423,17 @@ class BonosPanoramaView(APIView):
             monto = float(monto)
             tipo = b["tipo_instrumento"]
             if tipo == TipoInstrumento.BTU.value:
-                # miles de UF -> millones de CLP
-                filas.append(("BTU", "uf", "Mercado local", b["fecha_vencimiento"], monto * uf / 1000))
+                serie, moneda, monto_clp = "BTU", "uf", monto * uf / 1000  # miles de UF -> millones de CLP
             elif tipo == TipoInstrumento.BTP.value:
-                filas.append(("BTP", "clp", "Mercado local", b["fecha_vencimiento"], monto))
+                serie, moneda, monto_clp = "BTP", "clp", monto
             else:
-                filas.append(("Letras", "clp", "Mercado local", b["fecha_vencimiento"], monto))
+                serie, moneda, monto_clp = "Letras", "clp", monto
+            filas.append((serie, moneda, "Mercado local", b["fecha_vencimiento"], monto_clp))
+
+            # Las Letras quedan fuera: son cupón cero, su tasa carátula de 0% no refleja su costo.
+            # Para los locales solo existe la tasa carátula (aproximación del costo real).
+            if serie != "Letras":
+                filas_tasa.append((serie, b["fecha_vencimiento"].year, monto_clp, float(b["tasa_caratula"])))
 
         # Vencimientos por año y serie
         por_serie = defaultdict(lambda: defaultdict(float))
@@ -442,6 +451,23 @@ class BonosPanoramaView(APIView):
             for serie in self.ORDEN_SERIES
             if serie in por_serie
         ]
+
+        # Tasa promedio ponderada por monto, por serie y año (mismos años que los vencimientos)
+        acum_tasa = defaultdict(lambda: defaultdict(lambda: [0.0, 0.0]))  # [suma tasa*monto, suma monto]
+        for serie, anio, monto, tasa in filas_tasa:
+            acum_tasa[serie][anio][0] += tasa * monto
+            acum_tasa[serie][anio][1] += monto
+
+        series_tasa = []
+        for serie in self.ORDEN_SERIES:
+            if serie not in acum_tasa:
+                continue
+            datos, montos = [], []
+            for a in anios:
+                suma_ponderada, suma_monto = acum_tasa[serie].get(a, (0.0, 0.0))
+                datos.append(suma_ponderada / suma_monto if suma_monto else None)
+                montos.append(suma_monto)
+            series_tasa.append({"nombre": serie, "datos": datos, "montos": montos})
 
         # Composición del stock vigente
         por_moneda = defaultdict(float)
@@ -476,13 +502,15 @@ class BonosPanoramaView(APIView):
             if total else 0
         )
 
+        categorias = [str(a) for a in anios]
         return Response({
             "fecha_corte": hoy.isoformat(),
             "indicadores": {
                 ind: {"valor": float(obj.valor), "fecha": obj.fecha.isoformat()}
                 for ind, obj in indicadores.items()
             },
-            "vencimientos": {"categorias": [str(a) for a in anios], "series": series},
+            "vencimientos": {"categorias": categorias, "series": series},
+            "tasas": {"categorias": categorias, "series": series_tasa},
             "composicion_moneda": composicion_moneda,
             "composicion_mercado": composicion_mercado,
             "cifras": {
