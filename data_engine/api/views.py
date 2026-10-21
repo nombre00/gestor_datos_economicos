@@ -11,11 +11,19 @@ from data_engine.models import (
     StockTituloDeuda,
     BonoExterno,
     BonoLocal, 
-    IndicadorEconomico
+    IndicadorEconomico,
+    EstadoOperacionesGobiernoCentral
 )
 from data_engine.models.stock_titulo_deuda import Instrumento, Tenedor
 from data_engine.models.bono_externo import Moneda as MonedaBonoExterno, Vigencia
 from data_engine.models.bono_local import Status, TipoInstrumento
+from data_engine.models.estado_operaciones_gobierno_central import (
+    CONCEPTO_BALANCE,
+    CONCEPTO_INTERESES,
+    CONCEPTO_TOTAL_GASTOS,
+    CONCEPTO_TOTAL_INGRESOS,
+    UnidadEstadoOperaciones,
+)
 
 
 
@@ -577,4 +585,204 @@ class SerieHistoricaResumenView(APIView):
             "neta": resumen_ultimo(neta) if neta else None,
             "cambio_bruta": cambio,
             "minimo_bruta": minimo,
+        })
+
+
+# Componentes del Estado de Operaciones (ruta jerárquica exacta, etiqueta para el front)
+INGRESOS_POR_FUENTE = [
+    ("INGRESOS > Ingresos tributarios netos", "Tributarios netos"),
+    ("INGRESOS > Cobre bruto", "Cobre bruto"),
+    ("INGRESOS > Imposiciones previsionales", "Imposiciones previsionales"),
+    ("INGRESOS > Rentas de la propiedad", "Rentas de la propiedad"),
+    ("INGRESOS > Ingresos de operación", "Ingresos de operación"),
+    ("INGRESOS > Donaciones", "Donaciones"),
+    ("INGRESOS > Otros ingresos", "Otros ingresos"),
+]
+
+# TOTAL GASTOS = gastos corrientes (GASTOS) + inversión + transferencias de capital
+GASTOS_POR_TIPO = [
+    ("GASTOS > Personal", "Personal"),
+    ("GASTOS > Bienes y servicios de consumo y producción", "Bienes y servicios"),
+    ("GASTOS > Intereses", "Intereses"),
+    ("GASTOS > Subsidios y donaciones", "Subsidios y donaciones"),
+    ("GASTOS > Prestaciones previsionales", "Prestaciones previsionales"),
+    ("GASTOS > Otros", "Otros gastos"),
+    ("ADQUISICION NETA DE ACTIVOS NO FINANCIEROS > Inversión", "Inversión"),
+    ("ADQUISICION NETA DE ACTIVOS NO FINANCIEROS > Transferencias de Capital", "Transferencias de capital"),
+]
+
+ANIO_INICIO_REGLA_FISCAL = 2001
+
+
+def _series_estado_operaciones(unidad, conceptos):
+    """{concepto: {anio: valor}} y la lista de años, para una unidad."""
+    filas = (
+        EstadoOperacionesGobiernoCentral.objects
+        .filter(unidad=unidad, concepto__in=conceptos)
+        .values("anio", "concepto", "valor")
+    )
+    datos = defaultdict(dict)
+    anios = set()
+    for f in filas:
+        datos[f["concepto"]][f["anio"]] = float(f["valor"]) if f["valor"] is not None else None
+        anios.add(f["anio"])
+    return datos, sorted(anios)
+
+
+class EjecucionFiscalView(APIView):
+    """Todo lo de la página Ejecución fiscal, en la unidad pedida (?unidad=pct_pib|real|nominal).
+    Las cifras que no dependen de la unidad (promedios, peor año, intereses como % de los
+    ingresos) se calculan siempre desde el % del PIB."""
+
+    def get(self, request):
+        unidad = request.query_params.get("unidad", UnidadEstadoOperaciones.PCT_PIB)
+        if unidad not in UnidadEstadoOperaciones.values:
+            return Response(
+                {"detail": f"unidad debe ser una de: {', '.join(UnidadEstadoOperaciones.values)}"},
+                status=400,
+            )
+
+        claves = [CONCEPTO_TOTAL_INGRESOS, CONCEPTO_TOTAL_GASTOS, CONCEPTO_BALANCE, CONCEPTO_INTERESES]
+        conceptos = claves + [c for c, _ in INGRESOS_POR_FUENTE] + [c for c, _ in GASTOS_POR_TIPO]
+        datos, anios = _series_estado_operaciones(unidad, conceptos)
+        if not anios:
+            return Response({"detail": "No hay datos. Corre la ingesta de la DIPRES."}, status=404)
+
+        def serie(concepto):
+            return [datos.get(concepto, {}).get(a) for a in anios]
+
+        def series(lista):
+            return [{"nombre": etiqueta, "datos": serie(concepto)} for concepto, etiqueta in lista]
+
+        # Base para las cifras que no dependen de la unidad
+        pct, _ = _series_estado_operaciones(
+            UnidadEstadoOperaciones.PCT_PIB,
+            [CONCEPTO_BALANCE, CONCEPTO_TOTAL_INGRESOS, CONCEPTO_INTERESES],
+        )
+        balance_pct = pct[CONCEPTO_BALANCE]
+        intereses_pct_ingresos = [
+            pct[CONCEPTO_INTERESES][a] / pct[CONCEPTO_TOTAL_INGRESOS][a] * 100
+            if pct[CONCEPTO_INTERESES].get(a) is not None and pct[CONCEPTO_TOTAL_INGRESOS].get(a)
+            else None
+            for a in anios
+        ]
+
+        ultimo = anios[-1]
+        con_balance = [a for a in anios if balance_pct.get(a) is not None]
+        desde_regla = [balance_pct[a] for a in con_balance if a >= ANIO_INICIO_REGLA_FISCAL]
+        peor = min(con_balance, key=lambda a: balance_pct[a])
+        superavits = [a for a in con_balance if balance_pct[a] > 0]
+        ultimo_superavit = superavits[-1] if superavits else None
+
+        anio_base = None
+        if unidad == UnidadEstadoOperaciones.REAL:
+            anio_base = (
+                EstadoOperacionesGobiernoCentral.objects
+                .filter(unidad=unidad)
+                .values_list("anio_base", flat=True)
+                .first()
+            )
+
+        return Response({
+            "unidad": unidad,
+            "unidad_etiqueta": UnidadEstadoOperaciones(unidad).label,
+            "anio_base": anio_base,
+            "categorias": [str(a) for a in anios],
+            "ingresos_gastos": [
+                {"nombre": "Total ingresos", "datos": serie(CONCEPTO_TOTAL_INGRESOS)},
+                {"nombre": "Total gastos", "datos": serie(CONCEPTO_TOTAL_GASTOS)},
+            ],
+            "balance": serie(CONCEPTO_BALANCE),
+            "ingresos_por_fuente": series(INGRESOS_POR_FUENTE),
+            "gastos_por_tipo": series(GASTOS_POR_TIPO),
+            "intereses": serie(CONCEPTO_INTERESES),
+            "intereses_pct_ingresos": intereses_pct_ingresos,
+            "cifras": {
+                "anio": ultimo,
+                # En la unidad elegida
+                "balance": datos[CONCEPTO_BALANCE].get(ultimo),
+                "intereses": datos[CONCEPTO_INTERESES].get(ultimo),
+                # Independientes de la unidad (desde % del PIB)
+                "balance_pct_pib": balance_pct.get(ultimo),
+                "balance_promedio_desde": ANIO_INICIO_REGLA_FISCAL,
+                "balance_promedio_pct_pib": sum(desde_regla) / len(desde_regla) if desde_regla else None,
+                "peor_anio": peor,
+                "peor_balance_pct_pib": balance_pct[peor],
+                "ultimo_superavit_anio": ultimo_superavit,
+                "ultimo_superavit_pct_pib": balance_pct[ultimo_superavit] if ultimo_superavit else None,
+                "intereses_pct_ingresos": intereses_pct_ingresos[-1],
+            },
+        })
+
+
+# Financiamiento: deuda emitida (endeudamiento) y deuda pagada (amortizaciones)
+_PASIVOS = "PASIVOS NETOS INCURRIDOS"
+FINANCIAMIENTO = {
+    "emision_interna": f"{_PASIVOS} > Endeudamiento Interno Neto > Endeudamiento",
+    "emision_externa": f"{_PASIVOS} > Endeudamiento Externo Neto > Endeudamiento",
+    "amortizacion_interna": f"{_PASIVOS} > Endeudamiento Interno Neto > Amortizaciones",
+    "amortizacion_externa": f"{_PASIVOS} > Endeudamiento Externo Neto > Amortizaciones",
+    "neto_interno": f"{_PASIVOS} > Endeudamiento Interno Neto",
+    "neto_externo": f"{_PASIVOS} > Endeudamiento Externo Neto",
+}
+
+
+def _sumar(*valores):
+    """Suma ignorando None; devuelve None si todos son None."""
+    presentes = [v for v in valores if v is not None]
+    return sum(presentes) if presentes else None
+
+
+class FinanciamientoView(APIView):
+    """Deuda emitida vs amortizada por año (?unidad=pct_pib|real|nominal, por defecto % del PIB).
+    Las amortizaciones se entregan en negativo para graficarlas bajo cero."""
+
+    def get(self, request):
+        unidad = request.query_params.get("unidad", UnidadEstadoOperaciones.PCT_PIB)
+        if unidad not in UnidadEstadoOperaciones.values:
+            return Response(
+                {"detail": f"unidad debe ser una de: {', '.join(UnidadEstadoOperaciones.values)}"},
+                status=400,
+            )
+
+        datos, anios = _series_estado_operaciones(
+            unidad, list(FINANCIAMIENTO.values()) + [CONCEPTO_BALANCE]
+        )
+        if not anios:
+            return Response({"detail": "No hay datos. Corre la ingesta de la DIPRES."}, status=404)
+
+        def serie(clave):
+            concepto = FINANCIAMIENTO.get(clave, clave)
+            return [datos.get(concepto, {}).get(a) for a in anios]
+
+        def negativo(valores):
+            return [-v if v is not None else None for v in valores]
+
+        emision_int, emision_ext = serie("emision_interna"), serie("emision_externa")
+        amort_int, amort_ext = serie("amortizacion_interna"), serie("amortizacion_externa")
+        neto = [_sumar(i, e) for i, e in zip(serie("neto_interno"), serie("neto_externo"))]
+
+        # Cifras del último año
+        emision = _sumar(emision_int[-1], emision_ext[-1])
+        amortizacion = _sumar(amort_int[-1], amort_ext[-1])
+
+        return Response({
+            "unidad": unidad,
+            "categorias": [str(a) for a in anios],
+            "series": [
+                {"nombre": "Emisión interna", "datos": emision_int},
+                {"nombre": "Emisión externa", "datos": emision_ext},
+                {"nombre": "Amortización interna", "datos": negativo(amort_int)},
+                {"nombre": "Amortización externa", "datos": negativo(amort_ext)},
+            ],
+            "neto": neto,
+            "cifras": {
+                "anio": anios[-1],
+                "emision": emision,
+                "amortizacion": amortizacion,
+                "neto": neto[-1],
+                "balance": datos.get(CONCEPTO_BALANCE, {}).get(anios[-1]),
+                # De cada 100 emitidos, cuántos se usaron para pagar deuda que vencía
+                "pct_refinanciamiento": (amortizacion / emision * 100) if emision else None,
+            },
         })

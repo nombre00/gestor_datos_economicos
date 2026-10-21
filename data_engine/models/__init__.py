@@ -6,3 +6,4 @@ from .stock_titulo_deuda import StockTituloDeuda, Instrumento, Tenedor, TipoFila
 from .bono_externo import BonoExterno, Moneda, PagoIntereses, Vigencia
 from .bono_local import BonoLocal, TipoInstrumento, Status
 from .indicador_economico import IndicadorEconomico
+from .estado_operaciones_gobierno_central import EstadoOperacionesGobiernoCentral

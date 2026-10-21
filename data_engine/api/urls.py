@@ -15,6 +15,8 @@ from .views import (
     BonosLocalesView,
     BonosPanoramaView,
     SerieHistoricaResumenView,
+    EjecucionFiscalView,
+    FinanciamientoView,
 )
 
 urlpatterns = [
@@ -31,4 +33,6 @@ urlpatterns = [
     path("bonos/locales/tasa/", BonosLocalesTasaView.as_view()),
     path("bonos/panorama/", BonosPanoramaView.as_view()),
     path("serie-historica/resumen/", SerieHistoricaResumenView.as_view()),
+    path("presupuesto/ejecucion-fiscal/", EjecucionFiscalView.as_view()),
+    path("presupuesto/financiamiento/", FinanciamientoView.as_view()),
 ]
