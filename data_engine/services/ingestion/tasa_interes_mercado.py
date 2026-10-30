@@ -8,7 +8,12 @@ from data_engine.services.transform.tasa_interes_mercado import transformar
 
 logger = logging.getLogger(__name__)
 
-PATRONES_ARCHIVOS = ["BCCh Tasas bonos*.xlsx", "BCCh TPM*.xlsx"]
+PATRONES_ARCHIVOS = [
+    "BCCh Tasas bonos*.xlsx",
+    "BCCh TPM*.xlsx",
+    "BCCh Tasas PRC*.xlsx",
+    "BCCh Tasas captacion*.xlsx",
+]
 
 
 def ingerir(carpeta=None):

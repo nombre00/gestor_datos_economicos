@@ -8,7 +8,7 @@ from data_engine.models import TasaInteresMercado
 logger = logging.getLogger(__name__)
 
 SEIS_DECIMALES = Decimal("0.000001")
-CAMPOS_A_COMPARAR = ["valor", "instrumento", "plazo_anios", "tipo", "nombre"]
+CAMPOS_A_COMPARAR = ["valor", "instrumento", "plazo_anios", "plazo_etiqueta", "tipo", "nombre"]
 
 
 def _normalizar(campo, valor):
